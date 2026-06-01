@@ -82,6 +82,7 @@ orders_df = raw.get("orders", pd.DataFrame())
 plan_df = raw.get("plan", pd.DataFrame())
 adv_df = raw.get("advertising", pd.DataFrame())
 stock_df = raw.get("stock", pd.DataFrame())
+early_df = raw.get("early_spending", pd.DataFrame())
 
 # Фильтрация по артикулам менеджера
 if not orders_df.empty:
@@ -90,6 +91,8 @@ if not plan_df.empty:
     plan_df = plan_df[plan_df["article"].isin(art_set)].copy()
 if not adv_df.empty:
     adv_df = adv_df[adv_df["article"].isin(art_set)].copy()
+if not early_df.empty:
+    early_df = early_df[early_df["article"].isin(art_set)].copy()
 if not stock_df.empty:
     stock_df = stock_df[stock_df["article"].isin(art_set)].copy()
 
@@ -366,5 +369,44 @@ with tab4:
             display_adv["Расход, ₽"] = display_adv["Расход, ₽"].apply(lambda x: f"{int(x):,}".replace(",", " "))
             st.dataframe(
                 display_adv.style.background_gradient(subset=["ДРР, %"], cmap="RdYlGn_r", vmin=0, vmax=30),
+                use_container_width=True, hide_index=True,
+            )
+
+    st.divider()
+    st.subheader("⏰ Раннее откручивание рекламы")
+    st.caption("Артикулы, у которых бюджет потрачен до 22:00")
+
+    if early_df.empty:
+        st.info("Почасовые данные по рекламе недоступны.")
+    else:
+        early_filtered = early_df[early_df["last_spend_hour"] < 22].copy()
+        if early_filtered.empty:
+            st.success("✅ Нет артикулов с ранним откручиванием.")
+        else:
+            early_filtered = early_filtered.sort_values("last_spend_hour")
+
+            fig_early = go.Figure(go.Bar(
+                x=early_filtered["article"].astype(str),
+                y=early_filtered["pct_before_22"],
+                marker_color="#e67e22",
+                text=early_filtered["last_spend_hour"].apply(lambda h: f"до {h}:00"),
+                textposition="outside",
+            ))
+            fig_early.add_hline(y=100, line_dash="dash", line_color="red",
+                                annotation_text="100% до 22:00")
+            fig_early.update_layout(
+                title="Доля расхода до 22:00, %",
+                xaxis_title="Артикул", yaxis_title="%",
+                height=350, showlegend=False,
+            )
+            st.plotly_chart(fig_early, use_container_width=True)
+
+            disp_early = early_filtered[["article", "last_spend_hour", "spend_before_22", "total_spend", "pct_before_22"]].copy()
+            disp_early.columns = ["Артикул", "Последний час", "Расход до 22:00, ₽", "Всего расход, ₽", "% до 22:00"]
+            disp_early["Артикул"] = disp_early["Артикул"].astype(str)
+            disp_early["Расход до 22:00, ₽"] = disp_early["Расход до 22:00, ₽"].apply(lambda x: f"{int(x):,}".replace(",", " "))
+            disp_early["Всего расход, ₽"] = disp_early["Всего расход, ₽"].apply(lambda x: f"{int(x):,}".replace(",", " "))
+            st.dataframe(
+                disp_early.style.background_gradient(subset=["% до 22:00"], cmap="Oranges", vmin=0, vmax=100),
                 use_container_width=True, hide_index=True,
             )

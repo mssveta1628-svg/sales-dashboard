@@ -111,7 +111,13 @@ def load_from_excel() -> dict:
         stock["stock_qty"] = pd.to_numeric(stock["stock_qty"], errors="coerce").fillna(0)
         stock["article"] = stock["article"].astype(str).str.strip()
 
-    return {"orders": orders, "plan": plan, "advertising": adv, "stock": stock}
+    early = parse("early_spending")
+    if not early.empty and "hour" in early.columns:
+        early["article"] = early["article"].astype(str).str.strip()
+    else:
+        early = pd.DataFrame()
+
+    return {"orders": orders, "plan": plan, "advertising": adv, "stock": stock, "early_spending": early}
 
 
 # ---------------------------------------------------------------------------
@@ -190,7 +196,7 @@ def load_from_db(articles: tuple) -> dict:
         plan["actual_qty"] = 0
         plan["actual_revenue"] = 0
 
-    # 5. Реклама
+    # 5. Реклама (дневные итоги)
     adv = _query_texmod(f"""
         SELECT a.nm_id::text as nmid,
                ROUND(SUM(a.sum)::numeric / NULLIF(SUM(a.sum_price)::numeric, 0) * 100, 1) as drr,
@@ -206,4 +212,38 @@ def load_from_db(articles: tuple) -> dict:
         ).reset_index()
         adv["date"] = yesterday
 
-    return {"orders": orders, "plan": plan, "advertising": adv, "stock": stock}
+    # 6. Раннее откручивание рекламы (почасовые данные)
+    early = pd.DataFrame()
+    try:
+        early_raw = _query_texmod(f"""
+            SELECT a.nm_id::text as nmid,
+                   EXTRACT(HOUR FROM a.updtime)::int as hour,
+                   SUM(a.sum)::numeric as spend
+            FROM wber_advert.advert_fullstats a
+            WHERE a.date = '{yesterday}'
+              AND a.nm_id::text IN ('{nmids_str}')
+              AND a.sum > 0
+            GROUP BY a.nm_id, EXTRACT(HOUR FROM a.updtime)
+            ORDER BY a.nm_id, hour
+        """)
+        if not early_raw.empty and "hour" in early_raw.columns:
+            early_raw = early_raw.merge(nm_map, on="nmid")
+            by_art = early_raw.groupby("article")
+            rows = []
+            for art, grp in by_art:
+                total = grp["spend"].sum()
+                before_22 = grp[grp["hour"] < 22]["spend"].sum()
+                last_hour = grp["hour"].max()
+                pct_before_22 = round(before_22 / total * 100, 1) if total > 0 else 0
+                rows.append({
+                    "article": str(art),
+                    "last_spend_hour": int(last_hour),
+                    "spend_before_22": int(before_22),
+                    "total_spend": int(total),
+                    "pct_before_22": pct_before_22,
+                })
+            early = pd.DataFrame(rows)
+    except Exception:
+        pass
+
+    return {"orders": orders, "plan": plan, "advertising": adv, "stock": stock, "early_spending": early}
